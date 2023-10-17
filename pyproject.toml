@@ -8,7 +8,6 @@ authors = ["Blair Azzopardi <blairuk@gmail.com>"]
 python = "^3.7"
 lxml = { version = "^4.5.1" }
 svgpathtools = { git = "https://github.com/mathandy/svgpathtools.git", rev = "f99f9d6bb3519ecdcb7b167f75a09178595cf89c" }
-rmapy = {git = "https://github.com/bsdz/rmapy.git", rev = "master"}
 pillow = { version = "^8.0.0" }
 numpy = { version = "^1.19.4" }
 potrace = { git = "https://github.com/bsdz/pypotrace.git", rev = "master" }
@@ -23,7 +22,6 @@ rope = "^0.17.0"
 [tool.poetry.scripts]
 rmlines_pdf_converter = 'scripts.pdf_converter:main'
 rmlines_pen_gallery = 'scripts.pen_gallery:main'
-rmlines_samples = 'scripts.samples:main'
 
 [build-system]
 requires = ["poetry>=0.12"]

@@ -1,7 +1,7 @@
 from collections import namedtuple
 from itertools import product
 
-from rmlines.rmcloud import upload_rm_doc
+from rmlines.rm_io import upload_rm_doc
 
 from rmlines.constants import Pen, Width, Y_MAX
 from rmlines import RMLines, Layer

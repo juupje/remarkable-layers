@@ -17,7 +17,7 @@ import potrace
 
 from rmlines import RMLines, Layer, Stroke, Segment, Colour, Pen, Width, X_MAX, Y_MAX
 from rmlines.svg import apply_transform
-from rmlines.rmcloud import upload_rm_doc
+from rmlines.rm_io import save_rm_doc, upload_rm_doc
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +31,11 @@ def pdf_info(filename):
         for line in run.stdout.decode("utf8").splitlines()
     }
 
-
 def run_inkscape(filename, args=[], actions=[]):
+    print(" ".join(["inkscape"]
+        + [str(x) for x in args]
+        + (["--actions=\"%s\"" % "; ".join(actions)] if actions else [])
+        + [str(filename)]))
     run = subprocess.run(
         ["inkscape"]
         + args
@@ -43,7 +46,9 @@ def run_inkscape(filename, args=[], actions=[]):
     logger.info(run.stderr.decode("ascii"))
 
 
-def resize_doc(stage_svg):
+def resize_doc(stage_svg,to_file=None):
+    if to_file is None:
+        to_file = stage_svg #overwrite
     # resize to remarkable size
     root = ET.fromstring(stage_svg.read_bytes(), parser=XML_PARSER)
     x_min, y_min, x_max, y_max = [float(s) for s in root.attrib["viewBox"].split(" ")]
@@ -63,6 +68,7 @@ def resize_doc(stage_svg):
     # appending node to another group moves it (lxml)
     group = ET.Element("g", transform=f"scale({factor:0.2f})")
     for child in root:
+        if "sodipodi" in child.tag: continue
         group.append(child)
     root.append(group)
 
@@ -70,7 +76,11 @@ def resize_doc(stage_svg):
     root.attrib["height"] = f"{y_max_new:.2f}pt"
     root.attrib["viewBox"] = f"0 0 {x_max_new:.2f} {y_max_new:.2f}"
 
-    stage_svg.write_bytes(ET.tostring(root))
+    tree = ET.ElementTree(root)
+    ET.indent(tree, space="\t", level=0)
+    tree.write(to_file, encoding="utf-8")
+    #to_file.write_bytes(ET.tostring(root, pretty_print=True))
+    return to_file
 
 
 def trace_image(data, transform):
@@ -105,7 +115,8 @@ def trace_image(data, transform):
         ).tostring()
 
 
-def prepare_images(stage_svg):
+def prepare_images(stage_svg, to_file=None):
+    to_file = to_file or stage_svg
     """Traces bitmaps or removes them."""
     root = ET.fromstring(stage_svg.read_bytes(), parser=XML_PARSER)
     defs = root.find(".//defs", root.nsmap)
@@ -145,8 +156,8 @@ def prepare_images(stage_svg):
             g.getparent().replace(g, copy(clipping_path))
         defs.remove(clip_path)
 
-    stage_svg.write_bytes(ET.tostring(root))
-
+    to_file.write_bytes(ET.tostring(root))
+    return to_file
 
 CUBIC_TO_POLY = np.array(
     [
@@ -157,14 +168,14 @@ CUBIC_TO_POLY = np.array(
     ]
 )
 
-CUBIC_SAMPLE_SPACE = np.linspace(0, 1, 3)
-
-CUBIC_TO_POLY_SAMPLE = np.dot(
-    CUBIC_TO_POLY, np.power(CUBIC_SAMPLE_SPACE, [[3], [2], [1], [0]])
+CUBIC_SAMPLE_SPACE = lambda n: np.linspace(0, 1, n)
+CUBIC_TO_POLY_SAMPLE = lambda n: np.dot(
+    CUBIC_TO_POLY, np.power(CUBIC_SAMPLE_SPACE(n), [[3], [2], [1], [0]])
 )
 
+CACHE = {3: CUBIC_TO_POLY_SAMPLE(3)}
 
-def flatten_beziers(svg_d):
+def flatten_beziers(svg_d, n=3):
     sp = parse_path(svg_d)
     spn = SVGPath()
 
@@ -173,7 +184,12 @@ def flatten_beziers(svg_d):
             spn.append(seg)
         elif isinstance(seg, CubicBezier):
             B = [seg.bpoints()]
-            foo = np.dot(B, CUBIC_TO_POLY_SAMPLE)
+            try:
+                sample_mat = CACHE[n]
+            except KeyError:
+                sample_mat = CUBIC_TO_POLY_SAMPLE(n)
+                CACHE[n] = sample_mat
+            foo = np.dot(B, sample_mat)
             spn.extend([Line(x, y) for x, y in zip(foo[0, :-1], foo[0, 1:])])
         else:
             raise RuntimeError(f"unsupported {seg}")
@@ -181,18 +197,25 @@ def flatten_beziers(svg_d):
     return spn.d()
 
 
-def transform_to_line_segments(stage_svg):
+def transform_to_line_segments(stage_svg, to_file=None, n_symbol=3, n_other=None):
+    n_other = n_other or n_symbol
+    to_file = to_file or stage_svg
     """Converts bezier curves into straight line segments."""
     root = ET.fromstring(stage_svg.read_bytes(), parser=XML_PARSER)
-    x_min, y_min, x_max, y_max = map(float, root.attrib["viewBox"].split(" "))
+    symbol_kids = {c for p in root.iter() for c in p if ("id" in p.attrib and p.attrib["id"].startswith("glyph"))}
+    print(len(symbol_kids))
     for path in root.findall(".//path", root.nsmap):
         if "d" in path.attrib and path.attrib["d"]:
-            path.attrib["d"] = flatten_beziers(path.attrib["d"])
+            if(path in symbol_kids):
+                path.attrib["d"] = flatten_beziers(path.attrib["d"], n=n_symbol)
+            else:
+                path.attrib["d"] = flatten_beziers(path.attrib["d"], n=n_other)
 
-    stage_svg.write_bytes(ET.tostring(root))
+    to_file.write_bytes(ET.tostring(root))
+    return to_file
 
-
-def transform_paths(stage_svg):
+def transform_paths(stage_svg, to_file=None):
+    to_file = to_file or stage_svg
     """Inkscapes deep ungroup doesn't handle paths with inline matrix
     transforms well. Transform them here instead"""
     root = ET.fromstring(stage_svg.read_bytes(), parser=XML_PARSER)
@@ -201,8 +224,8 @@ def transform_paths(stage_svg):
         svg_path = parse_path(path.attrib["d"])
         path.attrib["d"] = transform(svg_path, trans_matrix).d()
 
-    stage_svg.write_bytes(ET.tostring(root))
-
+    to_file.write_bytes(ET.tostring(root))
+    return to_file
 
 def svgpathtools_flatten(stage_svg):
     # TODO: perhaps use this instead of inkscapes's deep ungroup?
@@ -216,25 +239,31 @@ def svgpathtools_flatten(stage_svg):
         pass
 
 
-def remove_groups(stage_svg):
+def remove_groups(stage_svg, to_file=None):
+    to_file = to_file or stage_svg
     """Some empty groups left behind. Clean them up."""
     # TODO: assert groups are actually empty
     root = ET.fromstring(stage_svg.read_bytes(), parser=XML_PARSER)
-    for g in root.findall("g", root.nsmap):
-        path = g.find("path", root.nsmap)
-        root.insert(0, path)
-        root.remove(g)
-    stage_svg.write_bytes(ET.tostring(root))
+    i = 0
+    for idx, elem in enumerate(list(root.iter())):
+        tag = elem.tag[elem.tag.rindex("}")+1:]
+        if(tag == "g"):
+            path = elem.find("path", root.nsmap)
+            root.insert(idx,path)
+            root.remove(elem)
 
+    to_file.write_bytes(ET.tostring(root))
+    return to_file
 
-def extract_svg_page(orig_pdf, page_no, out_dir, overwrite):
+def extract_svg_page(orig_pdf:Path, page_no:int, out_dir:Path, overwrite:bool, transform:dict={}):
     # NOTE: stage_svg is passed by reference and
     # mutated within calling functions.
     #
     stage_svg = out_dir / f"page_{page_no}.svg"
 
     if not overwrite and stage_svg.exists():
-        return
+        logger.warning(f"SVG {stage_svg} already exists, skipping...")
+        return stage_svg
 
     logger.info("Extracting to SVG page %s", page_no)
 
@@ -248,20 +277,20 @@ def extract_svg_page(orig_pdf, page_no, out_dir, overwrite):
 
     # capture document size and resize to width or height accordingly
     #
-    resize_doc(stage_svg)
-
+    stage_svg = resize_doc(stage_svg)
+    
     # flatten all cubic bezier paths into lines
     #
-    transform_to_line_segments(stage_svg)
+    stage_svg = transform_to_line_segments(stage_svg, **transform)
 
     # remove image masks and prepare for bitmap tracing
     #
-    prepare_images(stage_svg)
+    stage_svg = prepare_images(stage_svg)
 
     # transform paths with in line matrix transforms
     # (inkscape ungroup doesn't work well with these)
     #
-    transform_paths(stage_svg)
+    stage_svg = transform_paths(stage_svg)
 
     # inkscape tasks
     # TODO: optimize by rewriting as pure xml transforms
@@ -272,24 +301,26 @@ def extract_svg_page(orig_pdf, page_no, out_dir, overwrite):
     # * apply path (extension / modify path / apply transform) - https://stackoverflow.com/questions/13329125/removing-transforms-in-svg-files
     # * save as plain SVG
     #
+    
     run_inkscape(
         str(stage_svg),
-        ["--with-gui", "--batch-process"],
+        ["--batch-process"],
         [
             "mcepl.ungroup_deep.noprefs",
             "select-all",
             "object-to-path",
             "select-clear",
             "vacuum-defs",
-            "com.klowner.filter.applytransform.noprefs",
+            "com.klowner.filter.apply_transform",
             "FileSave",
             "file-close",
         ],
     )
 
     # remove remaining unecessary groups
-    #
-    remove_groups(stage_svg)
+    # and overwrite the original file
+    stage_svg = remove_groups(stage_svg)
+    return stage_svg
 
 
 def generate_template_layers(vertical_lines=True, horizontal_lines=True):
@@ -327,25 +358,18 @@ def generate_template_layers(vertical_lines=True, horizontal_lines=True):
     return layers
 
 
-def generate_rmlines_and_upload(in_dir, exclude_grid_layers=False):
-    name = f"{in_dir.name}_rm"
-
+def generate_rmlines(svgs, exclude_grid_layers=False):
     base_layers = [] if exclude_grid_layers else generate_template_layers()
 
-    def path_to_page_no(p):
-        return int(p.with_suffix("").name.split("_")[1])
-
     rms = []
-    for f in sorted(in_dir.glob("*.svg"), key=path_to_page_no):
+    for f in svgs:
         logger.info("Creating Rm Lines file for %s", f)
         rm = RMLines.from_svg(f.open("rb"))
+        print(str(rm))
         rm.objects[0].name = "Doc"
         rm.objects = base_layers + rm.objects
-
         rms.append(rm)
-
-    logger.info("Uploading to Remarkable cloud as '%s'", name)
-    upload_rm_doc(name, rms)
+    return rms
 
 
 def main():
@@ -361,28 +385,37 @@ def main():
     parser.add_argument(
         "--last", dest="last", type=int, default=None, help="Finish on this page number"
     )
+    parser.add_argument("--nsymb", help="Number of interpolation points of bezier curves in symbols/glyphs",
+                        type=int, default=5)
+    parser.add_argument("--n", help="Number of interpolation points of bezier curves other than symbols/glyphs",
+                        type=int, default=None)
     parser.add_argument(
         "--overwrite-svg",
         dest="overwrite_svg",
-        type=bool,
-        default=False,
+        action='store_true',
         help="Write over intermediate SVG files",
     )
     parser.add_argument(
         "--exclude-grid-layers",
         dest="exclude_grid_layers",
-        type=bool,
-        default=False,
+        action='store_true',
         help="Exclude note taking grid layers",
     )
     parser.add_argument(
         "--upload",
         dest="upload",
-        type=bool,
-        default=True,
+        action='store_true',
         help="Upload document to Remarkable Cloud",
     )
+    parser.add_argument(
+        "--upload-dest",
+        dest="upload_dest",
+        type=str,
+        help="Destination folder of the uploaded file. Implies --upload.",
+    )
     args = parser.parse_args()
+    if(args.upload_dest):
+        args.upload = True
 
     pdf_input = Path(args.pdf_input)
     if not pdf_input.exists():
@@ -396,19 +429,21 @@ def main():
         info = pdf_info(pdf_input)
         args.last = int(info["Pages"])
 
+    svgs = []
     for pn in range(args.first, args.last + 1):
-        extract_svg_page(
+        svgs.append(extract_svg_page(
             orig_pdf=pdf_input,
             page_no=pn,
             out_dir=out_dir,
             overwrite=args.overwrite_svg,
-        )
-
+            transform=dict(n_symbol = args.nsymb, n_other = args.n)
+        ))
+    rms = generate_rmlines(svgs, exclude_grid_layers=args.exclude_grid_layers)
     if args.upload:
-        generate_rmlines_and_upload(
-            out_dir, exclude_grid_layers=args.exclude_grid_layers
-        )
-
+        upload_rm_doc(pdf_input.stem+"_rm.zip", rms, dest_path=args.upload_dest)
+    else:
+        print("Saving as", pdf_input.stem+"_rm")
+        save_rm_doc(pdf_input.stem+"_rm.zip", rms)
 
 if __name__ == "__main__":
     main()
