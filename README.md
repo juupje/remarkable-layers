@@ -1,4 +1,4 @@
-Note: I am no longer using this project and I have archived it. Feel free to fork.
+Note: This is a forked project. The [original project](https://github.com/bsdz/remarkable-layers) is no longer being maintained and is incompatable with the new ReMarkable Cloud API. It also has issues with (my version of) Inkscape.
 
 # remarkable-layers
 
@@ -10,17 +10,37 @@ This module and supporting routines are experimental.
 
 ## Installation
 
-The module is still in development.
+The install instruction of the original repository can be find over there.
+This fork is not available as a Pip package (I have no idea how to do that; someone is welcome to create a package out of this).
 
-You can install it with the following pip command.
-
+### 1. The Python package
+You can install this fork by cloning it and using [poetry install](https://python-poetry.org/docs/cli/#install).
 ```bash
-pip install git+https://github.com/bsdz/remarkable-layers.git#master
+git clone https://github.com/juupje/remarkable-layers.git
+cd remarkable-layers
+poetry install
 ```
 
-Alternatively, you can install it by cloning this repository and using the [poetry install](https://python-poetry.org/docs/cli/#install) command.
+### 2. rmapi
+To upload documents to the reMarkable Cloud, `rmapi` is used. There exists a python implementation [rmapy](https://github.com/subutux/rmapy), but unfortunately it is not compatible with the new reMarkable Sync API (at the time of writing). Therefore, the GO implementation is used. Grab the binary (or build from source) from [https://github.com/juruen/rmapi/releases/tag/v0.0.25](https://github.com/juruen/rmapi/releases/tag/v0.0.25).
+Make sure to put the executable in your `PATH`.
+You need to run rmapi once to create the device and user token. Run it with:
 
+`./rmapi`
 
+The first time you run it, it will ask you to go to https://my.remarkable.com/ to enter a new activation code. You will see a prompt like this where you just need to introduce the activation code.
+
+`Enter one-time code (go to https://my.remarkable.com):`
+
+After entering the code, it should be connected to your cloud.
+
+### 3. Inkscape plugins
+For converting PDFs to RM Lines files (see below), you need Inkscape.
+First, install inkscape if you haven't already [https://inkscape.org/](https://inkscape.org/).
+
+This package requires two Inkscape plugins.
+1. `Ungroup Deep` should be part of the default Inkscape extensions.
+2. `Apply Transform` can be installed by grabbing the `.inx` and `.py` files from [https://github.com/Klowner/inkscape-applytransforms](https://github.com/Klowner/inkscape-applytransforms) and putting them in Inkscape's extensions folder (for linux users, this usually is `~/.config/inkscape/extensions`).
 
 ## Core Dependencies
 
@@ -28,7 +48,7 @@ The core module for reading & writing rm line files only uses core python standa
 
 The SVG conversion module utilises numpy and lxml.
 
-The example scripts introduce other dependencies.
+The scripts introduce other dependencies.
 
 ## Usage
 
@@ -71,41 +91,33 @@ p = Path("./my_simple.svg")
 rm0 = RMLines.from_svg(f.open("rb")
 ```
 
-## Example Scripts
+## Scripts
 
-### rmlines_pdf_converter
-
+### pdf_converter
+This is the main use-case of this project, I think.
 This script converts a pdf to several intermediate SVG files, one per page, then generates RM Lines notebook that is uploaded to Remarkable Cloud. The SVG output files are simplified SVG that the RM Lines module can process. That is all beziers have been linearized and raster images traced into paths. This can be time consuming.
 
 Typical usage:
 
 ```bash
-rmlines_pdf_converter my_file.pdf --first 10 --last 25
+pdf_converter my_file.pdf --first 10 --last 25 --upload
 ```
 
-Use "--help" flag for more options.
+Use "--help" flag for more options. The most important options are 
+- `--nsymb` the number of interpolation points of the bezier curves for symbols (letters, numbers and other glyphs). The default is 3, but can be increased for rounder symbols. This does increase the file size significantly.
+- `--n` The number of interpolation points for bezier curves other than those for symbols. The default is equal to `--nsymb`. Increasing it can make vector pictures (like those drawn with `TikZ`) look more true to the original.
+- `--upload-dest` Specifies the target folder to which the file is uploaded. Note, this should only be the path, the filename is determined from the input pdf.
+
+You can put this script in your `PATH` to call it directly from the commandline, or in your `PYTHONPATH` to call it as a python module (with `python -m pdf_converter`).
 
 #### Additional Dependencies
 
 Applications: inkscape and pdfinfo. 
-Python modules: potrace, svgpathtools, svgwrite, pillow and rmapy. Note that in pyproject.toml some dependencies reference git branches / revisions and/or forks.
+Python modules: potrace, svgpathtools, svgwrite, pillow. Note that in pyproject.toml some dependencies reference git branches / revisions and/or forks.
 
 ### pen_gallery
 
 This script uses hershey stroke fonts to place text in Remarkable lines files with different pen styles. More fonts are available at [SVG Fonts repo](ttps://gitlab.com/oskay/svg-fonts).
-
-## Obtaining a cloud token for upload
-
-Currently, one should initialize their connection to Remarkable Cloud using rmapy directly. You can obtain a one time token from [Remarkable's Mobile Connect](https://my.remarkable.com/connect/mobile) page.
-
-Then follow example as [described here](https://rmapy.readthedocs.io/en/latest/quickstart.html#registering-the-api-client). Eg,
-
-```python
-from rmapy.api import Client
-rmapy = Client()
-rmapy.register_device("<YOUR ONE TIME TOKEN>")
-```
-You should only need to do this once.
 
 ## Known issues
 
