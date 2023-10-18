@@ -1,3 +1,5 @@
+#! /usr/bin/env python3
+
 import subprocess
 from pathlib import Path
 import logging
@@ -374,7 +376,6 @@ def generate_rmlines(svgs, exclude_grid_layers=False):
 
 def main():
     logging.basicConfig(level="INFO")
-
     parser = ArgumentParser("Convert PDF into simple SVG.")
     parser.add_argument(
         "pdf_input", metavar="pdf_path", type=str, help="Path to file for conversion"
@@ -400,6 +401,12 @@ def main():
         dest="exclude_grid_layers",
         action='store_true',
         help="Exclude note taking grid layers",
+    )
+    parser.add_argument(
+        "--keep-svg",
+        dest="keep_svg",
+        action='store_true',
+        help="Do not delete temporary SVG files",
     )
     parser.add_argument(
         "--upload",
@@ -444,6 +451,10 @@ def main():
     else:
         print("Saving as", pdf_input.stem+"_rm")
         save_rm_doc(pdf_input.stem+"_rm.zip", rms)
+    if not args.keep_svg:
+        for svg in svgs:
+            svg.unlink()
+        out_dir.rmdir()
 
 if __name__ == "__main__":
     main()
